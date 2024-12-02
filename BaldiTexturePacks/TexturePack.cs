@@ -1,331 +1,311 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-using Newtonsoft.Json;
-using UnityEngine;
-using System.IO;
+﻿using BaldiTexturePacks.ReplacementSystem;
 using HarmonyLib;
-using System.Linq;
-using MTM101BaldAPI.AssetTools;
-using System.Reflection;
-using MonoMod.Utils;
-using AlmostEngine;
 using MTM101BaldAPI;
+using MTM101BaldAPI.AssetTools;
+using MTM101BaldAPI.Reflection;
+using Newtonsoft.Json;
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using UnityEngine;
+using BaldiTexturePacks.Legacy;
 
 namespace BaldiTexturePacks
 {
-    [Flags]
-    public enum SupportedTPFeatures
+
+    public enum PackFlags
     {
-        Textures = 1,
-        Audio = 2,
-        Midi = 4,
-        Language = 8,
-        ColorOverrides = 16
+        Legacy = 0,
+        TexturesAndSounds = 1
     }
 
+    public class PackMeta
+    {
+        [JsonProperty("Name")]
+        public string name;
+
+        [JsonProperty("Description")]
+        public string description;
+
+        [JsonProperty("Author")]
+        public string author;
+
+        [JsonProperty("Version")]
+        public int versionNumber;
+
+        public PackMeta()
+        {
+            name = "Unnamed";
+            description = "No description.";
+            author = "Nobody";
+            versionNumber = 6;
+        }
+    }
+
+    /// <summary>
+    /// The class representing a standard Texture Pack
+    /// </summary>
     public class TexturePack
     {
-        public TexturePack(string name, string author, int version, string fp)
-        {
-            Name = name;
-            Author = author;
-            Version = version;
-            filePath = fp;
-        }
+        protected string _path;
+        public string path => _path;
 
-        public void UpdateFile()
-        {
-            File.WriteAllText(Path.Combine(filePath, "pack.json"), JsonConvert.SerializeObject(this));
-        }
+        public string internalId => Path.GetFileNameWithoutExtension(_path);
+        public string localizationPath => Path.Combine(path, (flags == PackFlags.Legacy) ? "Subtitles.json" : "Subtitles_English.json");
+        public string overlaysPath => Path.Combine(path, "SpriteSwaps");
+        public Dictionary<Texture2D, string> texturesToReplacementsPaths = new Dictionary<Texture2D, string>();
+        public Dictionary<SoundObject, SoundReplacement> soundReplacements = new Dictionary<SoundObject, SoundReplacement>();
+        public Dictionary<AudioClip, string> clipReplacements = new Dictionary<AudioClip, string>();
+        private List<AudioClip> createdClips = new List<AudioClip>();
+        public PackMeta metaData = new PackMeta();
+        public LocalizationData localizationData = null;
 
-        private static FieldInfo lm_localizedText = AccessTools.Field(typeof(LocalizationManager), "localizedText");
-        public void Apply()
-        {
-            if (!enabled) return;
-            TPPlugin.Log.LogDebug(String.Format("[{0}] Loading...", Name));
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.Textures))
-            {
-                foreach (KeyValuePair<int, Texture2D> kvp in textures)
-                {
-                    try
-                    {
-                        Graphics.CopyTexture(kvp.Value, TPPlugin.Instance.allTextures.Where(x => x.GetHashCode() == kvp.Key).First());
-                    }
-                    catch (Exception)
-                    {
-                        throw new TexturePackLoadException(this, "Failed to load/copy " + kvp.Value.name + "!");
-                    }
-                }
-                TPPlugin.Log.LogDebug(String.Format("[{0}] Copied {1} textures.", Name, textures.Count));
-            }
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.Language) && langData != null)
-            {
-                Dictionary<string, string> dict = (Dictionary<string, string>)lm_localizedText.GetValue(Singleton<LocalizationManager>.Instance);
-                langData.items.Do(x =>
-                {
-                    dict[x.key] = x.value; //this is stupid but oh well
-                });
-                lm_localizedText.SetValue(Singleton<LocalizationManager>.Instance, dict);
-                TPPlugin.Log.LogDebug(String.Format("[{0}] Loaded {1} language elements.", Name, langData.items.Length));
-            }
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.Audio))
-            {
-                // replace all the clips
-                foreach (KeyValuePair<SoundObject, AudioClip> kvp in TPPlugin.Instance.originalSoundClips)
-                {
-                    if (clipsToReplace.ContainsKey(kvp.Value))
-                    {
-                        kvp.Key.soundClip = clipsToReplace[kvp.Value];
-                    }
-                }
-                foreach (KeyValuePair<AudioSource, AudioClip> kvp in TPPlugin.Instance.originalSourceClips)
-                {
-                    if (clipsToReplace.ContainsKey(kvp.Value))
-                    {
-                        if (kvp.Key.clip != null)
-                        {
-                            kvp.Key.clip = clipsToReplace[kvp.Value];
-                        }
-                    }
-                }
-                TPPlugin.Log.LogDebug(String.Format("[{0}] Loaded {1} audio replacements.", Name, clipsToReplace.Count));
-            }
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.Midi))
-            {
-                foreach (KeyValuePair<string, string> kvp in midiOverrides)
-                {
-                    TPPlugin.Instance.midiOverrides[kvp.Key] = kvp.Value;
-                }
-                TPPlugin.Log.LogDebug(String.Format("[{0}] Added {1} midis to midi replacement patch.", Name, midiOverrides.Count));
-            }
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.ColorOverrides))
-            {
-                if (overrides.FogColor != MiscOverrides.OverrideTemplate.FogColor) { TPPlugin.Instance.generalOverrides.FogColor = overrides.FogColor; }
-                if (overrides.TestFogColor != MiscOverrides.OverrideTemplate.TestFogColor) { TPPlugin.Instance.generalOverrides.TestFogColor = overrides.TestFogColor; }
-                if (overrides.UnderwaterColor != MiscOverrides.OverrideTemplate.UnderwaterColor) { TPPlugin.Instance.generalOverrides.UnderwaterColor = overrides.UnderwaterColor; }
-                if (overrides.ItemBackgroundColor != MiscOverrides.OverrideTemplate.ItemBackgroundColor) { TPPlugin.Instance.generalOverrides.ItemBackgroundColor = overrides.ItemBackgroundColor; }
-                if (overrides.ItemSelectColor != MiscOverrides.OverrideTemplate.ItemSelectColor) { TPPlugin.Instance.generalOverrides.ItemSelectColor = overrides.ItemSelectColor; }
-                if (overrides.DetentionTextColor != MiscOverrides.OverrideTemplate.DetentionTextColor) { TPPlugin.Instance.generalOverrides.DetentionTextColor = overrides.DetentionTextColor; }
-                if (overrides.DetentionText != MiscOverrides.OverrideTemplate.DetentionText) 
-                {
-                    TPPlugin.Instance.generalOverrides.UseClassicDetentionText = overrides.UseClassicDetentionText;
-                    TPPlugin.Instance.generalOverrides.DetentionText = overrides.DetentionText; 
-                }
-                if (overrides.ElevatorFloorColor != MiscOverrides.OverrideTemplate.ElevatorFloorColor) { TPPlugin.Instance.generalOverrides.ElevatorFloorColor = overrides.ElevatorFloorColor; }
-                if (overrides.ElevatorSeedColor != MiscOverrides.OverrideTemplate.ElevatorSeedColor) { TPPlugin.Instance.generalOverrides.ElevatorSeedColor = overrides.ElevatorSeedColor; }
-                TPPlugin.Instance.generalOverrides.BSODAShouldRotate &= overrides.BSODAShouldRotate;
-                TPPlugin.Log.LogDebug(String.Format("[{0}] Loaded color overrides succesfully.", Name));
-            }
-        }
-        public string GetDesc()
-        {
-            string warning = "";
-            if (langData != null)
-            {
-                if (langData.items.Length != 0)
-                {
-                    warning = "\n*This pack is not guranteed to instantly unload when disabled!";
-                }
-            }
-            /*if (clipsToReplace.Count != 0)
-            {
-                warning += "\n*This pack is using experimental features!(Audio replacement!)";
-            }*/
-            return String.Format("{0}{1}{2}\n{3}", Description, (warning != "") ? "*" : "", warning, "Author:" + Author);
-        }
+        public List<string> manualReplacementPaths = new List<string>();
+        public List<ReplaceNode> manualReplacements = new List<ReplaceNode>();
 
-        public void LoadTextures()
-        {
-            if (!Directory.Exists(Path.Combine(filePath, "Textures"))) return;
-            if (TPPlugin.Instance.allTextures.Length == 0) throw new Exception("allTextures is of length 0!");
-            string[] pngs = Directory.GetFiles(Path.Combine(filePath, "Textures"), "*.png");
-            for (int i = 0; i < pngs.Length; i++)
-            {
-                string nameToSearch = Path.GetFileNameWithoutExtension(pngs[i]).Trim();
-                IEnumerable<Texture2D> potentialTextures = TPPlugin.Instance.allTextures.Where(x => x.name == nameToSearch);
-                if (potentialTextures.ToArray().Length == 0)
-                {
-                    TPPlugin.Log.LogWarning(String.Format("[{0}] Unable to find texture with name: {1}!", Name, nameToSearch));
-                    continue;
-                }
-                Texture2D targetTex = potentialTextures.First();
-                Texture2D generatedTex = AssetLoader.AttemptConvertTo(AssetLoader.TextureFromFile(pngs[i]), targetTex.format);
-                generatedTex.name = Path.GetFileName(filePath) + "_" + generatedTex.name;
-                textures.Add(targetTex.GetHashCode(), generatedTex);
-            }
-        }
+        public List<string> spriteOverlayPaths = new List<string>();
+        public List<Sprite> createdSprites = new List<Sprite>();
 
-        public void LoadAudios()
-        {
-            AudioClip[] allclips = Resources.FindObjectsOfTypeAll<AudioClip>();
-            if (internalName == "core")
-            {
-                allclips.Do(clip =>
-                {
-                    clipsToReplace.Add(clip, clip);
-                });
-                return;
-            }
-            if (!Directory.Exists(Path.Combine(filePath, "Audio"))) return;
-            string[] sounds = Directory.GetFiles(Path.Combine(filePath, "Audio"));
-            for (int i = 0; i < sounds.Length; i++)
-            {
-                string extension = Path.GetExtension(sounds[i]).ToLower().Remove(0, 1).Trim();
-                if (extension == "dummy") throw new TexturePackLoadException(this, "Attempted to load dummy file! Please rename to proper format! " + Name + "/" + Path.GetFileNameWithoutExtension(sounds[i]));
-                if (extension == "ini") continue;
-                AudioClip clip = AssetLoader.AudioClipFromFile(sounds[i]);
-                clip.name = internalName + "_" + clip.name;
-                AudioClip[] possibleClips = allclips.Where(x => x.name == Path.GetFileNameWithoutExtension(sounds[i])).ToArray();
-                if (possibleClips.Length == 0)
-                {
-                    TPPlugin.Log.LogWarning(String.Format("[{0}] Unable to find audio with name: {1}!", Name, Path.GetFileNameWithoutExtension(sounds[i])));
-                    continue;
-                }
-                clipsToReplace.Add(possibleClips.First(), clip);
-            }
-        }
+        public List<string> midiPaths = new List<string>();
+        public List<string> loadedMidiIds = new List<string>();
 
-        public void LoadMidis()
-        {
-            if (!Directory.Exists(Path.Combine(filePath, "Midi"))) return;
-            string[] mids = Directory.GetFiles(Path.Combine(filePath, "Midi"), "*.mid");
-            for (int i = 0; i < mids.Length; i++)
-            {
-                string targetMidi = Path.GetFileNameWithoutExtension(mids[i]);
-                midiOverrides.Add(targetMidi, AssetLoader.MidiFromFile(mids[i], internalName + "_" + Path.GetFileNameWithoutExtension(targetMidi)));
-            }
-        }
-
-        public void LoadAllNeeded()
-        {
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.Textures))
-            {
-                try
-                {
-                    LoadTextures();
-                }
-                catch (Exception E)
-                {
-                    MTM101BaldiDevAPI.CauseCrash(TPPlugin.Instance.Info, E);
-                }
-            }
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.Language))
-            {
-                try
-                {
-                    LoadLocalization();
-                }
-                catch (Exception E)
-                {
-                    MTM101BaldiDevAPI.CauseCrash(TPPlugin.Instance.Info, E);
-                }
-            }
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.Audio))
-            {
-                try
-                {
-                    LoadAudios();
-                }
-                catch (Exception E)
-                {
-                    MTM101BaldiDevAPI.CauseCrash(TPPlugin.Instance.Info, E);
-                }
-            }
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.Midi))
-            {
-                try
-                {
-                    LoadMidis();
-                }
-                catch (Exception E)
-                {
-                    MTM101BaldiDevAPI.CauseCrash(TPPlugin.Instance.Info, E);
-                }
-            }
-            if (supportedFeatures.HasFlag(SupportedTPFeatures.ColorOverrides))
-            {
-                try
-                {
-                    LoadOverrides();
-                }
-                catch (Exception E)
-                {
-                    MTM101BaldiDevAPI.CauseCrash(TPPlugin.Instance.Info, E);
-                }
-            }
-        }
-
-        public void LoadLocalization()
-        {
-            string subPath = Path.Combine(filePath, "Subtitles.json");
-            if (!File.Exists(subPath)) return;
-            langData = JsonUtility.FromJson<LocalizationData>(File.ReadAllText(subPath));
-        }
-
-        public void LoadOverrides()
-        {
-            string subPath = Path.Combine(filePath, "Overrides.json");
-            if (!File.Exists(subPath)) return;
-            overrides = JsonConvert.DeserializeObject<MiscOverrides>(File.ReadAllText(subPath));
-        }
-
-        public string Name = "none";
-        public string Description = "A resource pack";
-        public string Author = "none";
-        public int Version = 0;
-        [JsonIgnore]
-        public bool enabled = false;
-
-        [JsonIgnore]
-        public SupportedTPFeatures supportedFeatures
+        public PackFlags flags
         {
             get
             {
-                return TPPlugin.Instance.configTextureOnly.Value ? SupportedTPFeatures.Textures : supportedFeaturesInternal;
-            }
-        }
-
-        [JsonIgnore]
-        public MiscOverrides overrides = new MiscOverrides();
-
-        [JsonIgnore]
-        protected SupportedTPFeatures supportedFeaturesInternal
-        {
-            get
-            {
-                if ((Version == -1) && (internalName != "core")) throw new Exception(Name + " is using pack version -1 despite not being the core pack!");
-                switch (Version)
+                if (metaData.versionNumber <= 5)
                 {
-                    case -1: //for core resource pack use
-                        return SupportedTPFeatures.Textures | SupportedTPFeatures.Audio | SupportedTPFeatures.ColorOverrides;
-                    case 1:
-                        return SupportedTPFeatures.Textures;
-                    case 2:
-                        return SupportedTPFeatures.Textures | SupportedTPFeatures.Language;
-                    case 3:
-                        return SupportedTPFeatures.Textures | SupportedTPFeatures.Language | SupportedTPFeatures.Audio;
-                    case 4:
-                        return SupportedTPFeatures.Textures | SupportedTPFeatures.Language | SupportedTPFeatures.Audio | SupportedTPFeatures.Midi;
-                    case 5:
-                        return SupportedTPFeatures.Textures | SupportedTPFeatures.Language | SupportedTPFeatures.Audio | SupportedTPFeatures.Midi | SupportedTPFeatures.ColorOverrides;
+                    return PackFlags.Legacy; // legacy pack
+                }
+                switch (metaData.versionNumber)
+                {
                     default:
-                        throw new NotImplementedException();
+                    case 6:
+                        return PackFlags.TexturesAndSounds;
                 }
             }
         }
-        [JsonIgnore]
-        public string filePath;
-        [JsonIgnore]
-        public string internalName => Path.GetFileName(filePath);
-        [JsonIgnore]
-        public Dictionary<int, Texture2D> textures = new Dictionary<int, Texture2D>();
-        [JsonIgnore]
-        public LocalizationData langData = null;
-        [JsonIgnore]
-        public Dictionary<AudioClip, AudioClip> clipsToReplace = new Dictionary<AudioClip, AudioClip>();
-        [JsonIgnore]
-        public Dictionary<string, string> midiOverrides = new Dictionary<string, string>();
-    }
 
+        public TexturePack(string path)
+        {
+            metaData = JsonConvert.DeserializeObject<PackMeta>(File.ReadAllText(Path.Combine(path, "pack.json")));
+            _path = path;
+            string texturesPath = Path.Combine(path, "Textures");
+            string soundPath = Path.Combine(path, "SoundObjects");
+            string clipsPath = Path.Combine(path, "AudioClips");
+            string midisPath = Path.Combine(path, "Midi");
+            string replacementsPath = Path.Combine(path, "Replacements");
+            // allow legacy packs to load somewhat
+            if (flags == PackFlags.Legacy)
+            {
+                soundPath = Path.Combine(path, "Audio");
+                clipsPath = Path.Combine(path, "Audio");
+            }
+            if (Directory.Exists(texturesPath))
+            {
+                string[] textures = Directory.GetFiles(texturesPath, "*.png");
+                for (int i = 0; i < textures.Length; i++)
+                {
+                    Texture2D textureToReplace = TexturePacksPlugin.validTexturesForReplacement.Find(x => x.name == Path.GetFileNameWithoutExtension(textures[i]));
+                    if (textureToReplace == null) continue;
+                    texturesToReplacementsPaths.Add(textureToReplace, textures[i]);
+                }
+            }
+            if (Directory.Exists(soundPath))
+            {
+                string[] audio = Directory.GetFiles(soundPath, "*.wav");
+                for (int i = 0; i < audio.Length; i++)
+                {
+                    SoundObject objectToReplace = TexturePacksPlugin.validSoundObjectsForReplacement.Find(x => x.name == Path.GetFileNameWithoutExtension(audio[i]));
+                    if (objectToReplace == null) continue;
+                    soundReplacements.Add(objectToReplace, new SoundReplacement()
+                    {
+                        clipPath = audio[i]
+                    });
+                }
+            }
+            if (Directory.Exists(clipsPath))
+            {
+                string[] clips = Directory.GetFiles(clipsPath, "*.wav");
+                for (int i = 0; i < clips.Length; i++)
+                {
+                    AudioClip clipToReplace = TexturePacksPlugin.validClipsForReplacement.Find(x => x.name == Path.GetFileNameWithoutExtension(clips[i]));
+                    if (clipToReplace == null) continue;
+                    clipReplacements.Add(clipToReplace, clips[i]);
+                }
+            }
+            if (Directory.Exists(midisPath))
+            {
+                midiPaths = Directory.GetFiles(midisPath, "*.mid").ToList();
+            }
+            if (flags != PackFlags.Legacy)
+            {
+                if (Directory.Exists(replacementsPath))
+                {
+                    manualReplacementPaths = Directory.GetFiles(replacementsPath, "*.json").ToList();
+                }
+                if (Directory.Exists(overlaysPath))
+                {
+                    spriteOverlayPaths = Directory.GetFiles(overlaysPath, "*.json").ToList();
+                }
+            }
+        }
+
+        public void LoadInstantly()
+        {
+            LoadAll().MoveUntilDone();
+        }
+
+        public void Unload()
+        {
+            foreach (AudioClip clip in createdClips)
+            {
+                UnityEngine.Object.Destroy(clip);
+            }
+            foreach (Sprite sprite in createdSprites)
+            {
+                UnityEngine.Object.Destroy(sprite.texture);
+                UnityEngine.Object.Destroy(sprite);
+            }
+            foreach (string midiId in loadedMidiIds)
+            {
+                AssetLoader.UnloadCustomMidi(midiId);
+            }
+            createdClips.Clear();
+            manualReplacements.Clear();
+            createdSprites.Clear();
+            localizationData = null;
+            loadedMidiIds.Clear();
+        }
+
+        public IEnumerator LoadAll()
+        {
+            Unload();
+            foreach (KeyValuePair<Texture2D, string> toReplacePath in texturesToReplacementsPaths)
+            {
+                yield return "Loading: " + toReplacePath.Value;
+                Texture2D toDo = AssetLoader.AttemptConvertTo(AssetLoader.TextureFromFile(toReplacePath.Value), toReplacePath.Key.format);
+                AssetLoader.ReplaceTexture(toReplacePath.Key, toDo);
+                UnityEngine.GameObject.Destroy(toDo);
+            }
+            foreach (KeyValuePair<SoundObject, SoundReplacement> replacement in soundReplacements)
+            {
+                yield return "Loading: " + replacement.Value.clipPath;
+                replacement.Value.Load();
+                TexturePacksPlugin.currentSoundReplacements[replacement.Key] = replacement.Value;
+            }
+            foreach (KeyValuePair<AudioClip, string> replacement in clipReplacements)
+            {
+                yield return "Loading: " + replacement.Value;
+                AudioClip audClip = AssetLoader.AudioClipFromFile(replacement.Value);
+                audClip.name += "_Pack"; //todo: update
+                createdClips.Add(audClip);
+                TexturePacksPlugin.currentClipReplacements[replacement.Key] = audClip;
+            }
+            foreach (string path in midiPaths)
+            {
+                yield return "Loading: " + path;
+                string loadedMidiID = AssetLoader.MidiFromFile(path, Path.GetFileNameWithoutExtension(path) + "_ovr");
+                loadedMidiIds.Add(loadedMidiID);
+                TexturePacksPlugin.currentMidiReplacements[Path.GetFileNameWithoutExtension(path)] = loadedMidiID;
+            }
+
+            if (File.Exists(Path.Combine(path, "Overrides.json")))
+            {
+                MiscOverrides compareAgainst = new MiscOverrides();
+                MiscOverrides legacyOverrides = JsonConvert.DeserializeObject<MiscOverrides>(File.ReadAllText(Path.Combine(path, "Overrides.json")));
+                if (legacyOverrides.FogColor != compareAgainst.FogColor)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyFogReplacement.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.FogColor.unityColor))));
+                }
+                if (legacyOverrides.TestFogColor != compareAgainst.TestFogColor)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyTestFogReplacement.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.TestFogColor.unityColor))));
+                }
+                if (legacyOverrides.UnderwaterColor != compareAgainst.UnderwaterColor)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyUnderwaterFogReplacement.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.UnderwaterColor.unityColor))));
+                }
+                if (legacyOverrides.ElevatorFloorColor != compareAgainst.ElevatorFloorColor)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyFloorTextReplacement.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.ElevatorFloorColor.unityColor))));
+                }
+                if (legacyOverrides.ElevatorSeedColor != compareAgainst.ElevatorSeedColor)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacySeedTextReplacement.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.ElevatorSeedColor.unityColor))));
+                }
+                if (legacyOverrides.DetentionTextColor != compareAgainst.DetentionTextColor)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyDetentionTextColorReplacement.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.DetentionTextColor.unityColor))));
+                }
+                if (legacyOverrides.DetentionText != compareAgainst.DetentionText)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyDetentionTextReplacement.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.DetentionText))));
+                }
+                if (legacyOverrides.UseClassicDetentionText != compareAgainst.UseClassicDetentionText)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyDetentionEnableClassic.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.UseClassicDetentionText))));
+                }
+                if (legacyOverrides.BSODAShouldRotate != compareAgainst.BSODAShouldRotate)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyBSODARotate.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.BSODAShouldRotate))));
+                }
+                if (legacyOverrides.ItemBackgroundColor != compareAgainst.ItemBackgroundColor)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyItemSlotBackgroundColor.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.ItemBackgroundColor.unityColor))));
+                }
+                if (legacyOverrides.ItemSelectColor != compareAgainst.ItemSelectColor)
+                {
+                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyItemSlotHighlightColor.json"))
+                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.ItemSelectColor.unityColor))));
+                }
+            }
+
+            foreach (string replacementPath in manualReplacementPaths)
+            {
+                yield return "Loading: " + replacementPath;
+                manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(replacementPath)));
+            }
+            if (manualReplacements.Count > 0)
+            {
+                yield return "Traversing replacement trees...";
+                foreach (ReplaceNode rpNode in manualReplacements)
+                {
+                    rpNode.GoThroughTree(TexturePacksPlugin.validManualReplacementTargets, null).Do(x => TexturePacksPlugin.AddUndo(x));
+                }
+            }
+            foreach (string overlayPath in spriteOverlayPaths)
+            {
+                yield return "Loading Sprite Swap: " + overlayPath;
+                Dictionary<string, SpriteOverlayData> data = JsonConvert.DeserializeObject<Dictionary<string, SpriteOverlayData>>(File.ReadAllText(overlayPath));
+                foreach (KeyValuePair<string, SpriteOverlayData> kvp in data)
+                {
+                    Sprite generatedSprite = kvp.Value.GenerateSprite(overlaysPath);
+                    createdSprites.Add(generatedSprite);
+                    TexturePacksPlugin.currentSpriteReplacements[kvp.Key] = generatedSprite;
+                }
+            }
+            if (File.Exists(localizationPath))
+            {
+                yield return "Reloading Localization...";
+                localizationData = JsonConvert.DeserializeObject<LocalizationData>(File.ReadAllText(localizationPath));
+                // todo: store this via AccessTools
+                Singleton<LocalizationManager>.Instance.ReflectionInvoke("Start", null);
+            }
+            yield break;
+        }
+    }
 }

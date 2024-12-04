@@ -22,6 +22,8 @@ namespace BaldiTexturePacks
 
         public static Dictionary<string, string> currentMidiReplacements = new Dictionary<string, string>();
 
+        public static Dictionary<Cubemap, Cubemap> currentCubemapReplacements = new Dictionary<Cubemap, Cubemap>();
+
         public static void AddUndo(Replacement toUndo)
         {
             // make sure there are no exact duplicates
@@ -36,6 +38,7 @@ namespace BaldiTexturePacks
             currentSoundReplacements.Clear();
             currentClipReplacements.Clear();
             currentSpriteReplacements.Clear();
+            currentCubemapReplacements.Clear();
 
             foreach (TexturePack pack in packs)
             {

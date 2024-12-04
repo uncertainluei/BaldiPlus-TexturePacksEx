@@ -19,6 +19,16 @@ using MTM101BaldAPI.SaveSystem;
 namespace BaldiTexturePacks
 {
     [BepInDependency("mtm101.rulerp.bbplus.baldidevapi")]
+    [BepInPlugin(ModGuid, ModName, ModVersion)]
+    public class TexturePacksExPlugin : BaseUnityPlugin
+    {
+        private const string ModName = "Texture Packs EX";
+        internal const string ModGuid = "io.github.uncertainluei.baldiplus.texturepacksex";
+        private const string ModVersion = "2024.1";
+    }
+
+    [BepInDependency("mtm101.rulerp.bbplus.baldidevapi")]
+    [BepInDependency(TexturePacksExPlugin.ModGuid)]
     [BepInPlugin("mtm101.rulerp.baldiplus.texturepacks", "Texture Packs", "3.0.0.0")]
     public partial class TexturePacksPlugin : BaseUnityPlugin
     {
@@ -279,6 +289,9 @@ namespace BaldiTexturePacks
 
         public static List<AudioClip> validClipsForReplacement = new List<AudioClip>();
 
+        public static List<Cubemap> validCubemapsForReplacement = new List<Cubemap>();
+
+
         string packsPath => Path.Combine(Application.streamingAssetsPath, "Texture Packs");
 
         string corePackPath => Path.Combine(packsPath, "core");
@@ -376,6 +389,39 @@ namespace BaldiTexturePacks
             handler.AddCategory<PackManagerScreen>("Texture\nPacks");
         }
 
+        // Unwrap cubemap to FADE format, format conversion code based off UniverseLib's implementation
+        Texture2D CubemapToTexture(Cubemap cubemap)
+        {
+            Texture2D tex = new Texture2D(cubemap.width * 6, cubemap.height, cubemap.format, false);
+            for (int i = 5, width = 0; i >= 0; i--, width += cubemap.width)
+            {
+                Graphics.CopyTexture(cubemap, i, 0, 0, 0, cubemap.width, cubemap.height, tex, 0, 0, width, 0);
+            }
+
+            // Convert to ARGB32
+            RenderTexture lastActive = RenderTexture.active;
+
+            RenderTexture dummyTexture = RenderTexture.GetTemporary(tex.width, tex.height, 0, RenderTextureFormat.ARGB32);
+            tex.filterMode = FilterMode.Point;
+            dummyTexture.filterMode = FilterMode.Point;
+            RenderTexture.active = dummyTexture;
+            Graphics.Blit(tex,dummyTexture);
+
+            Texture2D output = new Texture2D(tex.width, tex.height, TextureFormat.ARGB32, false);
+            output.ReadPixels(new Rect(0, 0, tex.width, tex.height), 0, 0);
+            output.Apply();
+
+            RenderTexture.active = lastActive;
+
+            Destroy(tex);
+
+            output = AssetLoader.FlipX(output);
+            output = AssetLoader.FlipY(output);
+
+            output.name = $"{cubemap.name}_Unwrapped";
+            return output;
+        }
+
         IEnumerator OnLoad()
         {
             yield return 11;
@@ -423,6 +469,11 @@ namespace BaldiTexturePacks
             {
                 Directory.CreateDirectory(texturesPath);
             }
+            string cubemapsPath = Path.Combine(corePackPath, "Cubemaps");
+            if (!Directory.Exists(cubemapsPath))
+            {
+                Directory.CreateDirectory(cubemapsPath);
+            }
             if (!File.Exists(Path.Combine(corePackPath, "README.txt")))
             {
                 File.WriteAllText(Path.Combine(corePackPath, "README.txt"), "Hello! You should not copy this folder to make your texture pack.\nThis folder does contain useful information and dumped textures(which you should only copy the ones you plan to modify), but is not a texture pack base.\nIf you are looking to make a Texture Pack, please look inside the install zip file, as there should be a \"TemplatePack\".\nFor more information, please go to: https://github.com/benjaminpants/BaldiTexturePacks/wiki");
@@ -436,9 +487,11 @@ namespace BaldiTexturePacks
                 .ToArray();
 
             // create grapple hook dummy texture
-            Texture2D grappleLine = new Texture2D(256, 256, TextureFormat.RGBA32, false);
-            grappleLine.filterMode = FilterMode.Point;
-            grappleLine.name = "GrappleLine";
+            Texture2D grappleLine = new Texture2D(256, 256, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Point,
+                name = "GrappleLine"
+            };
             Color[] colors = new Color[256 * 256];
             for (int i = 0; i < colors.Length; i++)
             {
@@ -449,6 +502,13 @@ namespace BaldiTexturePacks
             validTexturesForReplacement.Add(grappleLine);
             validTexturesForReplacement.AddRange(allTextures);
             allTextures = allTextures.AddToArray(grappleLine);
+
+            Cubemap[] allCubemaps = Resources.FindObjectsOfTypeAll<Cubemap>()
+                .Where(x => x.GetInstanceID() >= 0)
+                .Where(x => (x.name != "") && (x.name != null))
+                .ToArray();
+
+            validCubemapsForReplacement.AddRange(allCubemaps);
 
             int coreTexturesHash = allTextures.Length;
             bool shouldRegenerateDump = true;
@@ -552,7 +612,6 @@ namespace BaldiTexturePacks
             // handle all other dumps
             if (shouldRegenerateDump)
             {
-
                 // soundObject 'dump'
                 if (!Directory.Exists(Path.Combine(corePackPath, "SoundObjects")))
                 {
@@ -687,7 +746,7 @@ namespace BaldiTexturePacks
                 {
                     foundSprites.AddRange(allSprites.Where(x => x.texture.name == texturesToSearchFor[i]));
                 }
-                // im not adding all 100 baldi wave frames you cant make me
+                // im not adding all 50-51 baldi wave frames you cant make me
                 foundSprites.AddRange(allSprites.Where(x => x.texture.name.StartsWith("Baldi_Wave")));
 
                 foundSprites.Sort((a, b) => a.name.CompareTo(b.name));
@@ -700,6 +759,18 @@ namespace BaldiTexturePacks
                 }
 
                 File.WriteAllText(Path.Combine(corePackPath, "SpriteSwaps", "README.txt"), stb.ToString());
+
+                // Cubemap dumps
+                for (int i = 0; i < allCubemaps.Length; i++)
+                {
+                    Texture2D readableCopy;
+                    readableCopy = CubemapToTexture(allCubemaps[i]);
+
+                    File.WriteAllBytes(Path.Combine(cubemapsPath, allCubemaps[i].name + ".png"), readableCopy.EncodeToPNG());
+
+                    // Destroy leftover textures
+                    Destroy(readableCopy);
+                }
             }
 
             yield return "Adding packs...";

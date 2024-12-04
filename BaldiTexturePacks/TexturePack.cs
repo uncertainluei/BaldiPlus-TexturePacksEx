@@ -59,6 +59,7 @@ namespace BaldiTexturePacks
         public Dictionary<Texture2D, string> texturesToReplacementsPaths = new Dictionary<Texture2D, string>();
         public Dictionary<SoundObject, SoundReplacement> soundReplacements = new Dictionary<SoundObject, SoundReplacement>();
         public Dictionary<AudioClip, string> clipReplacements = new Dictionary<AudioClip, string>();
+        public Dictionary<Cubemap, string> cubemapReplacements = new Dictionary<Cubemap, string>();
         private List<AudioClip> createdClips = new List<AudioClip>();
         public PackMeta metaData = new PackMeta();
         public LocalizationData localizationData = null;
@@ -71,6 +72,9 @@ namespace BaldiTexturePacks
 
         public List<string> midiPaths = new List<string>();
         public List<string> loadedMidiIds = new List<string>();
+
+        public List<Cubemap> createdCubemaps = new List<Cubemap>();
+
 
         public PackFlags flags
         {
@@ -97,6 +101,7 @@ namespace BaldiTexturePacks
             string soundPath = Path.Combine(path, "SoundObjects");
             string clipsPath = Path.Combine(path, "AudioClips");
             string midisPath = Path.Combine(path, "Midi");
+            string cubemapsPath = Path.Combine(path, "Cubemaps");
             string replacementsPath = Path.Combine(path, "Replacements");
             // allow legacy packs to load somewhat
             if (flags == PackFlags.Legacy)
@@ -116,9 +121,12 @@ namespace BaldiTexturePacks
             }
             if (Directory.Exists(soundPath))
             {
-                string[] audio = Directory.GetFiles(soundPath, "*.wav");
+                string[] audio = Directory.GetFiles(soundPath);
                 for (int i = 0; i < audio.Length; i++)
                 {
+                    string ext = Path.GetExtension(audio[i]);
+                    if (ext == ".ini") continue;
+
                     SoundObject objectToReplace = TexturePacksPlugin.validSoundObjectsForReplacement.Find(x => x.name == Path.GetFileNameWithoutExtension(audio[i]));
                     if (objectToReplace == null) continue;
                     soundReplacements.Add(objectToReplace, new SoundReplacement()
@@ -141,15 +149,28 @@ namespace BaldiTexturePacks
             {
                 midiPaths = Directory.GetFiles(midisPath, "*.mid").ToList();
             }
-            if (flags != PackFlags.Legacy)
+
+            // Non-legacy features
+            if (flags == PackFlags.Legacy) return;
+            
+            if (Directory.Exists(replacementsPath))
             {
-                if (Directory.Exists(replacementsPath))
+                manualReplacementPaths = Directory.GetFiles(replacementsPath, "*.json").ToList();
+            }
+            if (Directory.Exists(overlaysPath))
+            {
+                spriteOverlayPaths = Directory.GetFiles(overlaysPath, "*.json").ToList();
+            }
+
+            if (Directory.Exists(cubemapsPath))
+            {
+                string[] cubemaps = Directory.GetFiles(cubemapsPath, "*.png");
+                for (int i = 0; i < cubemaps.Length; i++)
                 {
-                    manualReplacementPaths = Directory.GetFiles(replacementsPath, "*.json").ToList();
-                }
-                if (Directory.Exists(overlaysPath))
-                {
-                    spriteOverlayPaths = Directory.GetFiles(overlaysPath, "*.json").ToList();
+                    Cubemap cubemapToReplace = TexturePacksPlugin.validCubemapsForReplacement.Find(x => x.name == Path.GetFileNameWithoutExtension(cubemaps[i]));
+                    if (cubemapToReplace == null) continue;
+
+                    cubemapReplacements.Add(cubemapToReplace, cubemaps[i]);
                 }
             }
         }
@@ -174,11 +195,16 @@ namespace BaldiTexturePacks
             {
                 AssetLoader.UnloadCustomMidi(midiId);
             }
+            foreach (Cubemap cubemap in createdCubemaps)
+            {
+                UnityEngine.Object.Destroy(cubemap);
+            }
             createdClips.Clear();
             manualReplacements.Clear();
             createdSprites.Clear();
             localizationData = null;
             loadedMidiIds.Clear();
+            createdCubemaps.Clear();
         }
 
         public IEnumerator LoadAll()
@@ -204,6 +230,14 @@ namespace BaldiTexturePacks
                 audClip.name += "_Pack"; //todo: update
                 createdClips.Add(audClip);
                 TexturePacksPlugin.currentClipReplacements[replacement.Key] = audClip;
+            }
+            foreach (KeyValuePair<Cubemap, string> replacement in cubemapReplacements)
+            {
+                yield return "Loading: " + replacement.Value;
+                Cubemap cubemap = AssetLoader.CubemapFromFile(replacement.Value);
+                cubemap.name += "_Pack"; //todo: update
+                createdCubemaps.Add(cubemap);
+                TexturePacksPlugin.currentCubemapReplacements[replacement.Key] = cubemap;
             }
             foreach (string path in midiPaths)
             {

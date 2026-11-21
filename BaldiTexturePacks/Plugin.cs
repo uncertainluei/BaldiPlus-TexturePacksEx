@@ -22,7 +22,7 @@ using BepInEx.Configuration;
 namespace BaldiTexturePacks
 {
     [BepInDependency("mtm101.rulerp.bbplus.baldidevapi")]
-    [BepInPlugin("mtm101.rulerp.baldiplus.texturepacks", "Texture Packs", "3.2.0.1")]
+    [BepInPlugin("mtm101.rulerp.baldiplus.texturepacks", "Texture Packs", "3.3.0.1")]
     public partial class TexturePacksPlugin : BaseUnityPlugin
     {
         public static List<(string, bool)> packOrder = new List<(string, bool)>();
@@ -327,6 +327,7 @@ namespace BaldiTexturePacks
         {
             Harmony harmony = new Harmony("mtm101.rulerp.baldiplus.texturepacks");
             LoadingEvents.RegisterOnAssetsLoaded(this.Info, OnLoad(), LoadingEventOrder.Final);
+            spriteSwapsEnabled = Config.Bind("General", "Sprite Swaps", true, "If set to false, the sprite swap system will be disabled.\nThis WILL break packs, so only enable if SpriteSwaps are causing issues.");
             harmony.PatchAllConditionals();
             Log = this.Logger;
             Instance = this;
@@ -334,7 +335,6 @@ namespace BaldiTexturePacks
             AddReplacementTarget(gameObject.AddComponent<HardcodedTexturePackReplacements>());
             CustomOptionsCore.OnMenuInitialize += AddCategory;
             ModdedSaveSystem.AddSaveLoadAction(this, SaveHandler);
-            spriteSwapsEnabled = Config.Bind("General", "Sprite Swaps", true, "If set to false, the sprite swap system will be disabled.\nThis WILL break packs, so only enable if SpriteSwaps are causing issues.");
         }
 
         public void SaveHandler(bool isSave, string path)
@@ -384,6 +384,26 @@ namespace BaldiTexturePacks
             AddManualReplacementTargetsFromResources<MathMachine>().Do(x =>
             {
                 validMovableComponents.AddRange(x.GetComponentsInChildren<TMP_Text>().Select(z => (Component)z.transform));
+            });
+            AddManualReplacementTargetsFromResources<BalloonBuster>().Do(x =>
+            {
+                if (x.transform.Find("PulleySprite"))
+                {
+                    validMovableComponents.Add(x.transform.Find("PulleySprite").GetComponent<SpriteRenderer>());
+                }
+
+                if (x.transform.Find("Billboard"))
+                {
+                    validMovableComponents.AddRange(x.transform.Find("Billboard").GetComponentsInChildren<TMP_Text>().Select(z => (Component)z.transform));
+                }
+            });
+            AddManualReplacementTargetsFromResources<BalloonBusterBalloon>().Do(x =>
+            {
+                validMovableComponents.AddRange(x.transform.Find("RendererBase").GetComponentsInChildren<SpriteRenderer>());
+            });
+            AddManualReplacementTargetsFromResources<MatchActivityBalloon>().Do(x =>
+            {
+                validMovableComponents.AddRange(x.transform.Find("RendererBase").GetComponentsInChildren<SpriteRenderer>());
             });
             AddManualReplacementTargetsFromResources<FloodEvent>();
             AddManualReplacementTargetsFromResources<FogEvent>();
@@ -584,6 +604,10 @@ namespace BaldiTexturePacks
             Resources.FindObjectsOfTypeAll<TapePlayer>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
             Resources.FindObjectsOfTypeAll<HappyBaldi>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
             Resources.FindObjectsOfTypeAll<TutorialGameManager>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
+            Resources.FindObjectsOfTypeAll<BalloonBuster>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
+            Resources.FindObjectsOfTypeAll<BalloonBusterBalloon>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
+            Resources.FindObjectsOfTypeAll<MatchActivityBalloon>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
+            Resources.FindObjectsOfTypeAll<PacketOMatic>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
 
             yield return "Dumping all other data...";
             // handle all other dumps
@@ -736,7 +760,11 @@ namespace BaldiTexturePacks
                     "TapePlayerClosed",
                     "TapePlayerOpen",
                     "Phoneog",
-                    "Baldi_Talk_Standing_Sheet"
+                    "Baldi_Talk_Standing_Sheet",
+                    "BalloonBuster_Pulley_Sprite",
+                    "BalloonBuster_Balloons_Sheet",
+                    "MatchBalloon_Sheet",
+                    "PacketOMatic_Sheet_0"
                 };
 
                 List<Sprite> foundSprites = new List<Sprite>();

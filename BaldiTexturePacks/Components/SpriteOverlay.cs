@@ -11,10 +11,18 @@ namespace BaldiTexturePacks
     {
         SpriteRenderer toCopy;
         SpriteRenderer myRenderer;
+        MaterialPropertyBlock copyPropertyBlock = new MaterialPropertyBlock();
+        MaterialPropertyBlock myPropertyBlock = new MaterialPropertyBlock();
         string lastSpriteName = "";
         void Awake()
         {
             toCopy = GetComponent<SpriteRenderer>();
+            if (toCopy == null)
+            {
+                Debug.LogError("SpriteOverlay exists without SpriteRenderer? [" + transform.parent.name + "]");
+                Destroy(this);
+                return;
+            }
             toCopy.forceRenderingOff = true; // nothing else uses this (mods should just be using enabled, and bb+ doesn't cull characters.)
             GameObject child = new GameObject("FakeRenderer");
             child.transform.SetParent(transform);
@@ -32,6 +40,7 @@ namespace BaldiTexturePacks
             {
                 myRenderer.sprite = toCopy.sprite;
             }
+            myRenderer.GetPropertyBlock(myPropertyBlock);
         }
 
         void Update()
@@ -52,6 +61,12 @@ namespace BaldiTexturePacks
             }
             myRenderer.color = toCopy.color;
             myRenderer.enabled = toCopy.enabled;
+            toCopy.GetPropertyBlock(copyPropertyBlock);
+            myRenderer.GetPropertyBlock(myPropertyBlock);
+
+            myPropertyBlock.SetFloat("_SpriteRotation", copyPropertyBlock.GetFloat("_SpriteRotation"));
+
+            myRenderer.SetPropertyBlock(myPropertyBlock);
         }
     }
 }

@@ -15,21 +15,14 @@ using TMPro;
 using BaldiTexturePacks.Components;
 using MTM101BaldAPI.OptionsAPI;
 using MTM101BaldAPI.SaveSystem;
+using UnityEngine.UI;
+using MidiPlayerTK;
+using BepInEx.Configuration;
 
 namespace BaldiTexturePacks
 {
     [BepInDependency("mtm101.rulerp.bbplus.baldidevapi")]
-    [BepInPlugin(ModGuid, ModName, ModVersion)]
-    public class TexturePacksExPlugin : BaseUnityPlugin
-    {
-        private const string ModName = "Texture Packs EX";
-        internal const string ModGuid = "io.github.uncertainluei.baldiplus.texturepacksex";
-        private const string ModVersion = "2024.1";
-    }
-
-    [BepInDependency("mtm101.rulerp.bbplus.baldidevapi")]
-    [BepInDependency(TexturePacksExPlugin.ModGuid)]
-    [BepInPlugin("mtm101.rulerp.baldiplus.texturepacks", "Texture Packs", "3.0.0.0")]
+    [BepInPlugin("mtm101.rulerp.baldiplus.texturepacks", "Texture Packs", "3.2.0.1")]
     public partial class TexturePacksPlugin : BaseUnityPlugin
     {
         public static List<(string, bool)> packOrder = new List<(string, bool)>();
@@ -43,6 +36,8 @@ namespace BaldiTexturePacks
         public static List<TexturePack> packs = new List<TexturePack>();
 
         public static bool allPacksReady = false;
+
+        internal static ConfigEntry<bool> spriteSwapsEnabled;
 
         public static string[] manualExclusions => new string[]
         {
@@ -80,6 +75,7 @@ namespace BaldiTexturePacks
 
         public static SpriteOverlay[] AddOverlaysToTransform(Transform t)
         {
+            if (!spriteSwapsEnabled.Value) return new SpriteOverlay[0];
             List<SpriteOverlay> overlays = new List<SpriteOverlay>();
             SpriteRenderer[] renderers = GetAllIncludingDisabled<SpriteRenderer>(t);
             renderers.Do(x =>
@@ -232,10 +228,8 @@ namespace BaldiTexturePacks
                 new string[]
                 {
                 "BSODAShouldRotate",
-                "UseClassicDetentionText",
                 "ItemSlotBackgroundColor",
                 "ItemSlotHighlightColor",
-                "DetentionText"
                 }
             },
             {
@@ -272,13 +266,6 @@ namespace BaldiTexturePacks
                 {
                 "fogColor",
                 }
-            },
-            {
-                typeof(LookAtGuy),
-                new string[]
-                {
-                "fog",
-                }
             }
         };
 
@@ -291,10 +278,9 @@ namespace BaldiTexturePacks
 
         public static List<Cubemap> validCubemapsForReplacement = new List<Cubemap>();
 
+        public static string packsPath => Path.Combine(Application.streamingAssetsPath, "Texture Packs");
 
-        string packsPath => Path.Combine(Application.streamingAssetsPath, "Texture Packs");
-
-        string corePackPath => Path.Combine(packsPath, "core");
+        public static string corePackPath => Path.Combine(packsPath, "core");
 
         Dictionary<string, string> LoadAllPackLocalization(Language lang)
         {
@@ -340,7 +326,7 @@ namespace BaldiTexturePacks
         void Awake()
         {
             Harmony harmony = new Harmony("mtm101.rulerp.baldiplus.texturepacks");
-            LoadingEvents.RegisterOnAssetsLoaded(this.Info, OnLoad(), true);
+            LoadingEvents.RegisterOnAssetsLoaded(this.Info, OnLoad(), LoadingEventOrder.Final);
             harmony.PatchAllConditionals();
             Log = this.Logger;
             Instance = this;
@@ -348,6 +334,7 @@ namespace BaldiTexturePacks
             AddReplacementTarget(gameObject.AddComponent<HardcodedTexturePackReplacements>());
             CustomOptionsCore.OnMenuInitialize += AddCategory;
             ModdedSaveSystem.AddSaveLoadAction(this, SaveHandler);
+            spriteSwapsEnabled = Config.Bind("General", "Sprite Swaps", true, "If set to false, the sprite swap system will be disabled.\nThis WILL break packs, so only enable if SpriteSwaps are causing issues.");
         }
 
         public void SaveHandler(bool isSave, string path)
@@ -389,38 +376,6 @@ namespace BaldiTexturePacks
             handler.AddCategory<PackManagerScreen>("Texture\nPacks");
         }
 
-        // Unwrap cubemap to FADE format, format conversion code based off UniverseLib's implementation
-        Texture2D CubemapToTexture(Cubemap cubemap)
-        {
-            Texture2D tex = new Texture2D(cubemap.width * 6, cubemap.height, cubemap.format, false);
-            for (int i = 5, width = 0; i >= 0; i--, width += cubemap.width)
-            {
-                Graphics.CopyTexture(cubemap, i, 0, 0, 0, cubemap.width, cubemap.height, tex, 0, 0, width, 0);
-            }
-
-            // Convert to ARGB32
-            RenderTexture lastActive = RenderTexture.active;
-
-            RenderTexture dummyTexture = RenderTexture.GetTemporary(tex.width, tex.height, 0, RenderTextureFormat.ARGB32);
-            tex.filterMode = FilterMode.Point;
-            dummyTexture.filterMode = FilterMode.Point;
-            RenderTexture.active = dummyTexture;
-            Graphics.Blit(tex,dummyTexture);
-
-            Texture2D output = new Texture2D(tex.width, tex.height, TextureFormat.ARGB32, false);
-            output.ReadPixels(new Rect(0, 0, tex.width, tex.height), 0, 0);
-            output.Apply();
-
-            RenderTexture.active = lastActive;
-
-            Destroy(tex);
-
-            output = AssetLoader.FlipX(output);
-            output = AssetLoader.FlipY(output);
-
-            output.name = $"{cubemap.name}_Unwrapped";
-            return output;
-        }
 
         IEnumerator OnLoad()
         {
@@ -434,9 +389,10 @@ namespace BaldiTexturePacks
             AddManualReplacementTargetsFromResources<FogEvent>();
             AddManualReplacementTargetsFromResources<HudManager>().Do(x => AddAllChildrenToMovables(x.transform));
             AddManualReplacementTargetsFromResources<LookAtGuy>();
-            AddManualReplacementTargetsFromResources<DetentionUi>().Do(x =>
+            AddManualReplacementTargetsFromResources<DigitalClock>().Do(x =>
             {
-                validMovableComponents.AddRange(x.GetComponentsInChildren<RectTransform>());
+                validMovableComponents.AddRange(x.GetComponentsInChildren<SpriteRenderer>());
+                validMovableComponents.AddRange(x.GetComponentsInChildren<Image>());
             });
             AddManualReplacementTargetsFromResources<ElevatorScreen>().Do(x => AddAllChildrenToMovables(x.transform));
             AddManualReplacementTargetsFromResources<Item>().Do(x =>
@@ -487,11 +443,9 @@ namespace BaldiTexturePacks
                 .ToArray();
 
             // create grapple hook dummy texture
-            Texture2D grappleLine = new Texture2D(256, 256, TextureFormat.RGBA32, false)
-            {
-                filterMode = FilterMode.Point,
-                name = "GrappleLine"
-            };
+            Texture2D grappleLine = new Texture2D(256, 256, TextureFormat.RGBA32, false);
+            grappleLine.filterMode = FilterMode.Point;
+            grappleLine.name = "GrappleLine";
             Color[] colors = new Color[256 * 256];
             for (int i = 0; i < colors.Length; i++)
             {
@@ -510,7 +464,7 @@ namespace BaldiTexturePacks
 
             validCubemapsForReplacement.AddRange(allCubemaps);
 
-            int coreTexturesHash = allTextures.Length;
+            int coreTexturesHash = allTextures.Length + allCubemaps.Length;
             bool shouldRegenerateDump = true;
             string dumpCachePath = Path.Combine(corePackPath, "dumpCache.txt");
             if (File.Exists(dumpCachePath))
@@ -527,7 +481,15 @@ namespace BaldiTexturePacks
                 Texture2D readableCopy = allTextures[i].MakeReadableCopy(true);
                 if (shouldRegenerateDump)
                 {
-                    File.WriteAllBytes(Path.Combine(texturesPath, allTextures[i].name + ".png"), readableCopy.EncodeToPNG());
+                    try
+                    {
+                        File.WriteAllBytes(Path.Combine(texturesPath, allTextures[i].name + ".png"), readableCopy.EncodeToPNG());
+                    }
+                    catch(Exception E)
+                    {
+                        TexturePacksPlugin.Log.LogError("Can't dump or read texture: " + allTextures[i].name);
+                        TexturePacksPlugin.Log.LogError(E.ToString());
+                    }
                 }
                 originalTextures.Add(allTextures[i], readableCopy);
             }
@@ -604,14 +566,30 @@ namespace BaldiTexturePacks
                 c.prefabs.Do(kvp => AddOverlaysToTransform(kvp.Value.transform));
             });
 
+            Resources.FindObjectsOfTypeAll<ClickableSpecialFunctionTrigger>().Where(x => x.name.StartsWith("Baldi_Tutorial")).Do(c =>
+            {
+                AddOverlaysToTransform(c.transform);
+            });
+            // handle fieldtrip stuff
+            Resources.FindObjectsOfTypeAll<VolumeAnimator>().Where(x => x.name == "AnimatedTripBaldi").Do(c =>
+            {
+                AddOverlaysToTransform(c.transform);
+            });
+            Resources.FindObjectsOfTypeAll<RendererContainer>().Where(x => x.name == "FirstPrize_SpriteBase").Do(c =>
+            {
+                AddOverlaysToTransform(c.transform);
+            });
+
             Resources.FindObjectsOfTypeAll<Gum>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
             Resources.FindObjectsOfTypeAll<TapePlayer>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
             Resources.FindObjectsOfTypeAll<HappyBaldi>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
+            Resources.FindObjectsOfTypeAll<TutorialGameManager>().Where(x => x.GetInstanceID() >= 0).Do(x => AddOverlaysToTransform(x.transform));
 
             yield return "Dumping all other data...";
             // handle all other dumps
             if (shouldRegenerateDump)
             {
+
                 // soundObject 'dump'
                 if (!Directory.Exists(Path.Combine(corePackPath, "SoundObjects")))
                 {
@@ -622,11 +600,11 @@ namespace BaldiTexturePacks
 
                 stb.AppendLine("No audio dumping is currently available.");
                 stb.AppendLine("Below is a list of valid SoundObjects that you can replace(on the left)");
-                stb.AppendLine("And their associated subtitle and subtitle key.");
+                stb.AppendLine("And their associated subtitle, subtitle key, and AudioClip name.");
 
                 foreach (SoundObject sObj in validSoundObjectsForReplacement)
                 {
-                    stb.AppendLine(sObj.name + "->" + Singleton<LocalizationManager>.Instance.GetLocalizedText(sObj.soundKey) + "(" + sObj.soundKey + ")");
+                    stb.AppendLine(sObj.name + "->" + Singleton<LocalizationManager>.Instance.GetLocalizedText(sObj.soundKey) + "(" + sObj.soundKey + ")" + " | " + sObj.soundClip.name);
                 }
 
                 File.WriteAllText(Path.Combine(corePackPath, "SoundObjects", "README.txt"), stb.ToString());
@@ -656,7 +634,27 @@ namespace BaldiTexturePacks
 
                 File.WriteAllText(Path.Combine(corePackPath, "AudioClips", "README.txt"), stb.ToString());
 
-                // spriteswaps 'dump
+                // midi 'dump'
+                if (!Directory.Exists(Path.Combine(corePackPath, "Midi")))
+                {
+                    Directory.CreateDirectory(Path.Combine(corePackPath, "Midi"));
+                }
+
+                stb = new StringBuilder();
+                stb.AppendLine("No midi dumping is currently available.");
+                stb.AppendLine("Below is a list of all valid midi names.");
+
+                for (int i = 0; i < MidiPlayerGlobal.CurrentMidiSet.MidiFiles.Count; i++)
+                {
+                    if (!MidiPlayerGlobal.CurrentMidiSet.MidiFiles[i].StartsWith("custom_"))
+                    {
+                        stb.AppendLine(MidiPlayerGlobal.CurrentMidiSet.MidiFiles[i]);
+                    }
+                }
+
+                File.WriteAllText(Path.Combine(corePackPath, "Midi", "README.txt"), stb.ToString());
+
+                // spriteswaps 'dump'
                 if (!Directory.Exists(Path.Combine(corePackPath, "SpriteSwaps")))
                 {
                     Directory.CreateDirectory(Path.Combine(corePackPath, "SpriteSwaps"));
@@ -737,7 +735,8 @@ namespace BaldiTexturePacks
                     "Playtime",
                     "TapePlayerClosed",
                     "TapePlayerOpen",
-                    "Phoneog"
+                    "Phoneog",
+                    "Baldi_Talk_Standing_Sheet"
                 };
 
                 List<Sprite> foundSprites = new List<Sprite>();
@@ -746,7 +745,7 @@ namespace BaldiTexturePacks
                 {
                     foundSprites.AddRange(allSprites.Where(x => x.texture.name == texturesToSearchFor[i]));
                 }
-                // im not adding all 50-51 baldi wave frames you cant make me
+                // im not adding all 100 baldi wave frames you cant make me
                 foundSprites.AddRange(allSprites.Where(x => x.texture.name.StartsWith("Baldi_Wave")));
 
                 foundSprites.Sort((a, b) => a.name.CompareTo(b.name));
@@ -763,8 +762,7 @@ namespace BaldiTexturePacks
                 // Cubemap dumps
                 for (int i = 0; i < allCubemaps.Length; i++)
                 {
-                    Texture2D readableCopy;
-                    readableCopy = CubemapToTexture(allCubemaps[i]);
+                    Texture2D readableCopy = AssetLoader.TextureFromCubemap(allCubemaps[i]);
 
                     File.WriteAllBytes(Path.Combine(cubemapsPath, allCubemaps[i].name + ".png"), readableCopy.EncodeToPNG());
 
@@ -790,15 +788,23 @@ namespace BaldiTexturePacks
                 }
             }
             yield return "Loading packs...";
-            for (int i = 0; i < packOrder.Count; i++)
+            try
             {
-                TexturePack foundPack = packs.Find(x => x.internalId == packOrder[i].Item1);
-                if (foundPack == null) continue;
-                if (packOrder[i].Item2)
+                for (int i = 0; i < packOrder.Count; i++)
                 {
-                    foundPack.LoadInstantly();
+                    TexturePack foundPack = packs.Find(x => x.internalId == packOrder[i].Item1);
+                    if (foundPack == null) continue;
+                    if (packOrder[i].Item2)
+                    {
+                        foundPack.LoadInstantly();
+                    }
                 }
             }
+            catch (Exception E)
+            {
+                MTM101BaldiDevAPI.CauseCrash(this.Info, E);
+            }
+            FinalizePackLoading();
             allPacksReady = true;
             if (packOrderChanged)
             {

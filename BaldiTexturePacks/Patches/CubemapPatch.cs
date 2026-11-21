@@ -1,6 +1,5 @@
 ﻿using HarmonyLib;
 using UnityEngine;
-
 namespace BaldiTexturePacks.Patches
 {
     [HarmonyPatch(typeof(Shader))]
@@ -16,5 +15,4 @@ namespace BaldiTexturePacks.Patches
             }
         }
     }
-
 }

@@ -19,7 +19,8 @@ namespace BaldiTexturePacks
     public enum PackFlags
     {
         Legacy = 0,
-        TexturesAndSounds = 1
+        TexturesAndSounds = 1,
+        Cubemaps = 2
     }
 
     public class PackMeta
@@ -41,7 +42,7 @@ namespace BaldiTexturePacks
             name = "Unnamed";
             description = "No description.";
             author = "Nobody";
-            versionNumber = 6;
+            versionNumber = 7;
         }
     }
 
@@ -59,12 +60,13 @@ namespace BaldiTexturePacks
         public Dictionary<Texture2D, string> texturesToReplacementsPaths = new Dictionary<Texture2D, string>();
         public Dictionary<SoundObject, SoundReplacement> soundReplacements = new Dictionary<SoundObject, SoundReplacement>();
         public Dictionary<AudioClip, string> clipReplacements = new Dictionary<AudioClip, string>();
-        public Dictionary<Cubemap, string> cubemapReplacements = new Dictionary<Cubemap, string>();
         private List<AudioClip> createdClips = new List<AudioClip>();
         public PackMeta metaData = new PackMeta();
         public LocalizationData localizationData = null;
 
         public List<string> manualReplacementPaths = new List<string>();
+
+        public List<string> subtitleOverridePaths = new List<string>();
         public List<ReplaceNode> manualReplacements = new List<ReplaceNode>();
 
         public List<string> spriteOverlayPaths = new List<string>();
@@ -73,8 +75,8 @@ namespace BaldiTexturePacks
         public List<string> midiPaths = new List<string>();
         public List<string> loadedMidiIds = new List<string>();
 
+        public Dictionary<Cubemap, string> cubemapReplacementPaths = new Dictionary<Cubemap, string>();
         public List<Cubemap> createdCubemaps = new List<Cubemap>();
-
 
         public PackFlags flags
         {
@@ -89,6 +91,8 @@ namespace BaldiTexturePacks
                     default:
                     case 6:
                         return PackFlags.TexturesAndSounds;
+                    case 7:
+                        return PackFlags.Cubemaps;
                 }
             }
         }
@@ -101,8 +105,8 @@ namespace BaldiTexturePacks
             string soundPath = Path.Combine(path, "SoundObjects");
             string clipsPath = Path.Combine(path, "AudioClips");
             string midisPath = Path.Combine(path, "Midi");
-            string cubemapsPath = Path.Combine(path, "Cubemaps");
             string replacementsPath = Path.Combine(path, "Replacements");
+            string cubemapsPath = Path.Combine(path, "Cubemaps");
             // allow legacy packs to load somewhat
             if (flags == PackFlags.Legacy)
             {
@@ -121,18 +125,19 @@ namespace BaldiTexturePacks
             }
             if (Directory.Exists(soundPath))
             {
-                string[] audio = Directory.GetFiles(soundPath);
+                string[] audio = Directory.GetFiles(soundPath, "*.wav");
                 for (int i = 0; i < audio.Length; i++)
                 {
-                    string ext = Path.GetExtension(audio[i]);
-                    if (ext == ".ini") continue;
-
                     SoundObject objectToReplace = TexturePacksPlugin.validSoundObjectsForReplacement.Find(x => x.name == Path.GetFileNameWithoutExtension(audio[i]));
                     if (objectToReplace == null) continue;
                     soundReplacements.Add(objectToReplace, new SoundReplacement()
                     {
                         clipPath = audio[i]
                     });
+                }
+                if (flags != PackFlags.Legacy)
+                {
+                    subtitleOverridePaths = Directory.GetFiles(soundPath, "*.json").ToList();
                 }
             }
             if (Directory.Exists(clipsPath))
@@ -149,28 +154,28 @@ namespace BaldiTexturePacks
             {
                 midiPaths = Directory.GetFiles(midisPath, "*.mid").ToList();
             }
-
-            // Non-legacy features
-            if (flags == PackFlags.Legacy) return;
-            
-            if (Directory.Exists(replacementsPath))
+            if (flags != PackFlags.Legacy)
             {
-                manualReplacementPaths = Directory.GetFiles(replacementsPath, "*.json").ToList();
-            }
-            if (Directory.Exists(overlaysPath))
-            {
-                spriteOverlayPaths = Directory.GetFiles(overlaysPath, "*.json").ToList();
-            }
-
-            if (Directory.Exists(cubemapsPath))
-            {
-                string[] cubemaps = Directory.GetFiles(cubemapsPath, "*.png");
-                for (int i = 0; i < cubemaps.Length; i++)
+                if (Directory.Exists(replacementsPath))
                 {
-                    Cubemap cubemapToReplace = TexturePacksPlugin.validCubemapsForReplacement.Find(x => x.name == Path.GetFileNameWithoutExtension(cubemaps[i]));
-                    if (cubemapToReplace == null) continue;
-
-                    cubemapReplacements.Add(cubemapToReplace, cubemaps[i]);
+                    manualReplacementPaths = Directory.GetFiles(replacementsPath, "*.json").ToList();
+                }
+                if (Directory.Exists(overlaysPath))
+                {
+                    spriteOverlayPaths = Directory.GetFiles(overlaysPath, "*.json").ToList();
+                }
+                if (flags.HasFlag(PackFlags.Cubemaps))
+                {
+                    if (Directory.Exists(cubemapsPath))
+                    {
+                        string[] cubemaps = Directory.GetFiles(cubemapsPath, "*.png");
+                        for (int i = 0; i < cubemaps.Length; i++)
+                        {
+                            Cubemap cubemapToReplace = TexturePacksPlugin.validCubemapsForReplacement.Find(x => x.name == Path.GetFileNameWithoutExtension(cubemaps[i]));
+                            if (cubemapToReplace == null) continue;
+                            cubemapReplacementPaths.Add(cubemapToReplace, cubemaps[i]);
+                        }
+                    }
                 }
             }
         }
@@ -231,20 +236,25 @@ namespace BaldiTexturePacks
                 createdClips.Add(audClip);
                 TexturePacksPlugin.currentClipReplacements[replacement.Key] = audClip;
             }
-            foreach (KeyValuePair<Cubemap, string> replacement in cubemapReplacements)
+            foreach (string subOverridePath in subtitleOverridePaths)
+            {
+                yield return "Loading Subtitle Override: " + subOverridePath;
+                TexturePacksPlugin.currentSubtitleOverrides[TexturePacksPlugin.validSoundObjectsForReplacement.First(x => x.name == Path.GetFileNameWithoutExtension(subOverridePath))] = JsonConvert.DeserializeObject<SubtitleOverrideData>(File.ReadAllText(subOverridePath));
+            }
+            foreach (string path in midiPaths)
+            {
+                yield return "Loading Midi: " + path;
+                string loadedMidiID = AssetLoader.MidiFromFile(path, Path.GetFileNameWithoutExtension(path) + "_ovr");
+                loadedMidiIds.Add(loadedMidiID);
+                TexturePacksPlugin.currentMidiReplacements[Path.GetFileNameWithoutExtension(path)] = loadedMidiID;
+            }
+            foreach (KeyValuePair<Cubemap, string> replacement in cubemapReplacementPaths)
             {
                 yield return "Loading: " + replacement.Value;
                 Cubemap cubemap = AssetLoader.CubemapFromFile(replacement.Value);
                 cubemap.name += "_Pack"; //todo: update
                 createdCubemaps.Add(cubemap);
                 TexturePacksPlugin.currentCubemapReplacements[replacement.Key] = cubemap;
-            }
-            foreach (string path in midiPaths)
-            {
-                yield return "Loading: " + path;
-                string loadedMidiID = AssetLoader.MidiFromFile(path, Path.GetFileNameWithoutExtension(path) + "_ovr");
-                loadedMidiIds.Add(loadedMidiID);
-                TexturePacksPlugin.currentMidiReplacements[Path.GetFileNameWithoutExtension(path)] = loadedMidiID;
             }
 
             if (File.Exists(Path.Combine(path, "Overrides.json")))
@@ -255,11 +265,6 @@ namespace BaldiTexturePacks
                 {
                     manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyFogReplacement.json"))
                         .Replace("%", ReplaceNode.FieldToString(legacyOverrides.FogColor.unityColor))));
-                }
-                if (legacyOverrides.TestFogColor != compareAgainst.TestFogColor)
-                {
-                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyTestFogReplacement.json"))
-                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.TestFogColor.unityColor))));
                 }
                 if (legacyOverrides.UnderwaterColor != compareAgainst.UnderwaterColor)
                 {
@@ -275,21 +280,6 @@ namespace BaldiTexturePacks
                 {
                     manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacySeedTextReplacement.json"))
                         .Replace("%", ReplaceNode.FieldToString(legacyOverrides.ElevatorSeedColor.unityColor))));
-                }
-                if (legacyOverrides.DetentionTextColor != compareAgainst.DetentionTextColor)
-                {
-                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyDetentionTextColorReplacement.json"))
-                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.DetentionTextColor.unityColor))));
-                }
-                if (legacyOverrides.DetentionText != compareAgainst.DetentionText)
-                {
-                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyDetentionTextReplacement.json"))
-                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.DetentionText))));
-                }
-                if (legacyOverrides.UseClassicDetentionText != compareAgainst.UseClassicDetentionText)
-                {
-                    manualReplacements.Add(JsonConvert.DeserializeObject<ReplaceNode>(File.ReadAllText(Path.Combine(AssetLoader.GetModPath(TexturePacksPlugin.Instance), "LegacyDetentionEnableClassic.json"))
-                        .Replace("%", ReplaceNode.FieldToString(legacyOverrides.UseClassicDetentionText))));
                 }
                 if (legacyOverrides.BSODAShouldRotate != compareAgainst.BSODAShouldRotate)
                 {
@@ -336,8 +326,6 @@ namespace BaldiTexturePacks
             {
                 yield return "Reloading Localization...";
                 localizationData = JsonConvert.DeserializeObject<LocalizationData>(File.ReadAllText(localizationPath));
-                // todo: store this via AccessTools
-                Singleton<LocalizationManager>.Instance.ReflectionInvoke("Start", null);
             }
             yield break;
         }
